@@ -1,0 +1,172 @@
+<link rel="stylesheet" href="style.css">
+
+<div id="roomSelect" class="container">
+  <h2>🎯 Escolha uma sala</h2>
+  <div id="roomList"></div>
+
+  <h3>➕ Criar nova sala</h3>
+  <form id="createRoomForm">
+    <input id="newRoomName" placeholder="Nome da sala..." required>
+    <input id="newRoomPassword" type="password" placeholder="Senha (opcional)">
+    <button type="submit">Criar sala</button>
+  </form>
+</div>
+
+<div id="chatUI" class="chat-container" style="display:none;">
+  <header>
+    <h2 id="roomTitle">💬 Chat</h2>
+    <button id="leaveBtn">Sair</button>
+  </header>
+
+  <main id="chatBox"></main>
+
+  <footer>
+    <input id="msg" placeholder="Digite sua mensagem">
+    <button id="sendBtn">Enviar</button>
+  </footer>
+</div>
+
+<!-- Modal para salas privadas -->
+<div id="passwordModal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h3>🔒 Sala privada</h3>
+    <input id="roomPassword" type="password" placeholder="Digite a senha">
+    <button id="confirmPasswordBtn">Entrar</button>
+    <button onclick="closeModal()">Cancelar</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+let username = "", userId = "", socket, currentRoom="", pendingRoom="";
+
+fetch("/me")
+  .then(res => res.json())
+  .then(data => {
+    if(data.error){ window.location.href="/login.html"; }
+    else { username = data.username; userId = data.userId; loadRooms(); }
+  });
+
+// ----- Carregar lista de salas -----
+async function loadRooms(){
+  const res = await fetch("/rooms");
+  const rooms = await res.json();
+  const list = document.getElementById("roomList");
+  list.innerHTML = "";
+
+  if(rooms.length === 0) {
+    list.innerHTML = "<p>Nenhuma sala criada ainda.</p>";
+  }
+
+  rooms.forEach(r => {
+    const div = document.createElement("div");
+    div.classList.add("room-card");
+    div.innerHTML = `
+      <span>${r.name} ${r.private ? "🔒" : "🌐"}</span>
+      <button onclick="joinRoom('${r.name}', ${r.private})">Entrar</button>
+    `;
+    list.appendChild(div);
+  });
+}
+
+// ----- Entrar em sala -----
+async function joinRoom(name, isPrivate){
+  if(isPrivate){
+    pendingRoom = name;
+    document.getElementById("passwordModal").style.display = "flex";
+    return;
+  }
+  tryJoinRoom(name, "");
+}
+
+function closeModal(){
+  document.getElementById("passwordModal").style.display = "none";
+  document.getElementById("roomPassword").value = "";
+  pendingRoom = "";
+}
+
+document.getElementById("confirmPasswordBtn").addEventListener("click", async () => {
+  const password = document.getElementById("roomPassword").value;
+  tryJoinRoom(pendingRoom, password);
+  closeModal();
+});
+
+async function tryJoinRoom(name, password){
+  const res = await fetch("/join-room", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ name, password })
+  });
+
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+
+  startChat(name);
+}
+
+// ----- Iniciar chat -----
+function startChat(room){
+  currentRoom = room;
+  document.getElementById("roomSelect").style.display = "none";
+  document.getElementById("chatUI").style.display = "flex";
+  document.getElementById("roomTitle").textContent = "💬 Sala: " + room;
+
+  socket = io();
+  socket.emit("joinRoom", room);
+
+  document.getElementById("msg").addEventListener("keydown", function(e) {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault(); // impede quebra de linha
+    sendMessage();
+  }
+});
+  document.getElementById("sendBtn").addEventListener("click", sendMessage);
+  document.getElementById("leaveBtn").addEventListener("click", () => {
+    socket.disconnect();
+    location.reload();
+  });
+
+  socket.on("history", msgs => {
+    msgs.forEach(data => renderMessage(data.username, data.message));
+  });
+
+  socket.on("message", data => {
+    renderMessage(data.username, data.msg);
+  });
+}
+
+function sendMessage(){
+  const msg = document.getElementById("msg").value;
+  if(msg.trim()!==""){
+    socket.emit("chatMessage", msg, userId, username);
+    document.getElementById("msg").value="";
+  }
+}
+
+function renderMessage(user, text){
+  const div = document.createElement("div");
+  div.classList.add("msg-bubble", user === username ? "mine" : "other");
+  div.innerHTML = `<strong>${user}</strong><p>${text}</p>`;
+  document.getElementById("chatBox").appendChild(div);
+  document.getElementById("chatBox").scrollTop = document.getElementById("chatBox").scrollHeight;
+}
+
+// ----- Criar nova sala -----
+document.getElementById("createRoomForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const name = document.getElementById("newRoomName").value.trim();
+  const password = document.getElementById("newRoomPassword").value.trim();
+
+  const res = await fetch("/rooms", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ name, password })
+  });
+
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+
+  loadRooms();
+  e.target.reset();
+});
+</script>
